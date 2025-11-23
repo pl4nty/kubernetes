@@ -1,0 +1,94 @@
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+"on":
+  push:
+    tags:
+      - v*
+name: default
+jobs:
+  default:
+    permissions:
+      actions: read
+      contents: write
+      issues: read
+      packages: write
+      pull-requests: read
+      id-token: write
+    runs-on:
+      - namespace-profile-cached
+    if: (!startsWith(github.head_ref, 'renovate/') && !startsWith(github.head_ref, 'dependabot/'))
+    steps:
+      - name: gather-system-info
+        id: system-info
+        uses: kenchan0130/actions-system-info@v1.4.0
+        continue-on-error: true
+      - name: print-system-info
+        run: |
+          MEMORY_GB=$((${{ steps.system-info.outputs.totalmem }}/1024/1024/1024))
+
+          OUTPUTS=(
+            "CPU Core: ${{ steps.system-info.outputs.cpu-core }}"
+            "CPU Model: ${{ steps.system-info.outputs.cpu-model }}"
+            "Hostname: ${{ steps.system-info.outputs.hostname }}"
+            "NodeName: ${NODE_NAME}"
+            "Kernel release: ${{ steps.system-info.outputs.kernel-release }}"
+            "Kernel version: ${{ steps.system-info.outputs.kernel-version }}"
+            "Name: ${{ steps.system-info.outputs.name }}"
+            "Platform: ${{ steps.system-info.outputs.platform }}"
+            "Release: ${{ steps.system-info.outputs.release }}"
+            "Total memory: ${MEMORY_GB} GB"
+          )
+
+          for OUTPUT in "${OUTPUTS[@]}";do
+            echo "${OUTPUT}"
+          done
+        continue-on-error: true
+      - name: checkout
+        uses: actions/checkout@v5
+      - name: Set up Docker Buildx
+        id: setup-buildx
+        uses: docker/setup-buildx-action@v3
+      - name: build
+        env:
+          KUBE_DOCKER_REGISTRY: ghcr.io/${{ github.repository_owner }}
+          KUBE_BUILD_PLATFORMS: linux/riscv64
+          # KUBE_BUILD_CONFORMANCE: "n"
+          # Custom targets to add kubelet and kube-log-runner (go-runner) dependency 
+          KUBE_EXTRA_WHAT: >
+            staging/src/k8s.io/component-base/logs/kube-log-runner
+            cmd/kubelet
+          # TODO build from https://github.com/kubernetes/release/tree/master/images/build
+          KUBE_GORUNNER_IMAGE: xlawy/go-runner:v2.4.0-go1.24.6-bookworm.0
+          KUBE_PROXY_BASE_IMAGE: xlawy/distroless-iptables:v0.7.8
+        run: |
+          make release-images
+      - name: build-pause
+        working-directory: build/pause
+        env:
+          ARCH: riscv64
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          # TODO same as above. kube-cross is bullseye so we can't even install with apt
+          KUBE_CROSS_IMAGE: docker.io/carlosedp/crossbuild-riscv64
+          KUBE_CROSS_VERSION: latest
+        run: |
+          make container
+      - name: login-to-registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+      - name: push
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+        run: |
+          docker images "$REGISTRY/*" --format "{{.Repository}}:{{.Tag}}" | xargs -I {} docker push {}
+      - name: release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |-
+            _output/dockerized/bin/**/*

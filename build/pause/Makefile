@@ -73,6 +73,7 @@ TRIPLE.linux-arm := arm-linux-gnueabihf
 TRIPLE.linux-arm64 := aarch64-linux-gnu
 TRIPLE.linux-ppc64le := powerpc64le-linux-gnu
 TRIPLE.linux-s390x := s390x-linux-gnu
+TRIPLE.linux-riscv64 := riscv64-linux-gnu
 TRIPLE := ${TRIPLE.${OS}-${ARCH}}
 
 # If you want to build AND push all containers, see the 'all-push' rule.
